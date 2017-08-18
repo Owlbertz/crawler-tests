@@ -8,7 +8,7 @@ let startDate = new Date();
 let parseRobots = require('robots-parser');
 let url = require('url');
 let request = require('request');
-let sitemap = require('sitemapper');
+let Sitemapper = require('sitemapper');
 
 let normalizeUrl = function(currentUrl) {
     currentUrl = currentUrl.replace(/\/\//g, '/'); // Normalize double slash
@@ -63,8 +63,13 @@ request(robotsUrl, function (res, response) {
 
     console.log('Sitemap', robots.getSitemaps());
     let sitemaps = robots.getSitemaps();
+    var sitemapper = new Sitemapper({
+        url: baseUrl + '/' + sitemaps[0],
+        timeout: 15000 //15 seconds 
+    });
 
-    sitemap.fetch(sitemaps[0]).then(function(sites) {
+    sitemapper.fetch().then(function(data) {
+        let sites = data.sites;
         console.log(sites);
 
         for (let i = 0; i < sites.length; i++) {
