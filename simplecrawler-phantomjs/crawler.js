@@ -2,61 +2,43 @@
 
 /* globals document: true */
 
-var phantomAPI  = require("phantom"),
-    Crawler     = require("simplecrawler"),
-    colors      = require("colors/safe"),
-    phantomjs   = require("phantomjs");
+var phantomAPI = require("phantom"),
+    Crawler = require("simplecrawler"),
+    colors = require("colors/safe"),
+    phantomjs = require("phantomjs");
+const cheerio = require('cheerio');
+const fs = require('fs');
 
-var crawler = new Crawler("http://localhost/tests/javascript"),
+var crawler = new Crawler("http://quotes.toscrape.com/js"),
     phantomBin = phantomjs.path,
     phantomBannedExtensions = /\.(png|jpg|jpeg|gif|ico|css|js|csv|doc|docx|pdf)$/i,
     phantomQueue = [];
 
+
+crawler.useProxy = true;
+crawler.proxyHostname = '172.20.1.13';
+crawler.proxyPort = 8888;
+
 crawler.interval = 0;
-phantomAPI.create({ binary: phantomBin }, runCrawler);
+phantomAPI.create(['--proxy=http://172.20.1.13:8888'], { binary: phantomBin }).then(runCrawler);
+
+console.log('Created');
 
 
-// Events which end up being a bit noisy
-var boringEvents = [
-    "queueduplicate",
-    "fetchstart",
-    "discoverycomplete"
-];
+let RESULT = [];
+// crawler.on("complete", process.exit.bind(process, 0));
 
-// Replace original emit so we can sample all events easily
-// and log them to console
-var originalEmit = crawler.emit;
-
-crawler.emit = function(name, queueItem) {
-    var url = "";
-
-    if (queueItem) {
-        if (typeof queueItem === "string") {
-            url = queueItem;
-        } else if (queueItem.url) {
-            url = queueItem.url;
-        }
-    }
-
-    function pad(string) {
-        while (string.length < 20) {
-            string += " ";
-        }
-        return string;
-    }
-
-    if (boringEvents.indexOf(name) === -1) {
-        console.log(colors.cyan("%s") + "%s", pad(name), url);
-    }
-
-    originalEmit.apply(crawler, arguments);
-};
-
-crawler.on("complete", process.exit.bind(process, 0));
+function save(callback) {
+    fs.writeFile('result.json', JSON.stringify(RESULT), () => {
+        console.log('Saved', RESULT.lenght, 'quotes');
+        callback();
+    });
+}
 
 function runCrawler(phantom) {
     crawler.start();
-    crawler.on("queueadd", function(queueItem) {
+    console.log('Started');
+    crawler.on("queueadd", function (queueItem) {
         if (!queueItem.url.match(phantomBannedExtensions)) {
             var resume = this.wait();
             phantomQueue.push(queueItem.url);
@@ -68,16 +50,32 @@ function runCrawler(phantom) {
 function getLinks(phantom, url, callback) {
     console.log(colors.green("Phantom attempting to load ") + colors.cyan("%s"), url);
 
-    makePage(phantom, url, function(page, status) {
+    makePage(phantom, url, function (page, status) {
         console.log(
             colors.green("Phantom opened URL with %s — ") + colors.cyan("%s"), status, url);
 
-        page.evaluate(findPageLinks, function(result) {
-            result.forEach(function(url) {
+        page.evaluate(extractContent).then(function (result) {
+            RESULT = RESULT.concat(result);
+            return page.evaluate(findPageLinks)
+        }).then(function (urls) {
+            urls.forEach(function (url) {
                 crawler.queueURL(url);
             });
             callback();
         });
+    });
+}
+
+function extractContent() {
+    console.log('Called extractContent');
+    var quotes = document.querySelectorAll('.quote');
+    quotes = [].slice.call(quotes);
+    return quotes.map(function (ele) {
+        var quote = {
+            author: ele.querySelector('.author').innerHTML,
+            text: ele.querySelector('.text').innerHTML
+        };
+        return quote;
     });
 }
 
@@ -86,17 +84,17 @@ function findPageLinks() {
     selector = [].slice.call(selector);
 
     return selector
-                .map(function(link) {
-                    return link.href || link.onclick || link.href || link.src;
-                })
-                .filter(function(src) {
-                    return Boolean(src);
-                });
+        .map(function (link) {
+            return link.href || link.onclick || link.href || link.src;
+        })
+        .filter(function (src) {
+            return Boolean(src);
+        });
 }
 
 function makePage(phantom, url, callback) {
-    phantom.createPage(function(page) {
-        page.open(url, function(status) {
+    phantom.createPage().then((page) => {
+        page.setting('javascriptEnabled').then(() => page.open(url)).then(function (status) {
             callback(page, status);
         });
     });
@@ -113,10 +111,11 @@ function processQueue(phantom, resume) {
         if (!item) {
             console.log(colors.green("Phantom reached end of queue! ------------"));
             queueBeingProcessed = false;
+            return save(resume);
             return resume();
         }
 
-        getLinks(phantom, item, function() {
+        getLinks(phantom, item, function () {
             // Break up stack so we don't blow it
             setTimeout(processor.bind(null, phantomQueue.shift()), 10);
         });
